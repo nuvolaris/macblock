@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1050" role="img" aria-labelledby="title desc">
+  <title id="title">MacBlock GPU authorization watchdog architecture</title>
+  <desc id="desc">
+    Architecture and flow diagram for the Bestia MacBlock watchdog: GPU discovery,
+    public GHCR runtime image, external serial authorization, persistent state,
+    scale-to-zero enforcement, and restore.
+  </desc>
+
+  <defs>
+    <style>
+      .bg { fill: #f7fafc; }
+      .panel { fill: #ffffff; stroke: #1f2937; stroke-width: 2; rx: 18; }
+      .panel-soft { fill: #f8fafc; stroke: #64748b; stroke-width: 1.5; rx: 14; }
+      .kube { fill: #ecfeff; stroke: #0891b2; }
+      .nuvolaris { fill: #fff7ed; stroke: #ea580c; }
+      .external { fill: #f0fdf4; stroke: #16a34a; }
+      .danger { fill: #fef2f2; stroke: #dc2626; }
+      .state { fill: #f5f3ff; stroke: #7c3aed; }
+      .secret { fill: #fffbeb; stroke: #d97706; }
+      .image { fill: #eef2ff; stroke: #4f46e5; }
+      .text { fill: #111827; font-family: Inter, Arial, sans-serif; font-size: 20px; }
+      .small { fill: #374151; font-family: Inter, Arial, sans-serif; font-size: 16px; }
+      .tiny { fill: #4b5563; font-family: Inter, Arial, sans-serif; font-size: 14px; }
+      .title { fill: #0f172a; font-family: Inter, Arial, sans-serif; font-size: 38px; font-weight: 700; }
+      .section { fill: #0f172a; font-family: Inter, Arial, sans-serif; font-size: 24px; font-weight: 700; }
+      .label { fill: #0f172a; font-family: Inter, Arial, sans-serif; font-size: 18px; font-weight: 700; }
+      .mono { fill: #1f2937; font-family: "JetBrains Mono", Consolas, monospace; font-size: 15px; }
+      .arrow { fill: none; stroke: #334155; stroke-width: 3; marker-end: url(#arrow); }
+      .arrow-soft { fill: none; stroke: #64748b; stroke-width: 2.5; marker-end: url(#arrow); }
+      .arrow-good { fill: none; stroke: #16a34a; stroke-width: 3; marker-end: url(#arrow-green); }
+      .arrow-bad { fill: none; stroke: #dc2626; stroke-width: 3; marker-end: url(#arrow-red); }
+      .arrow-dashed { fill: none; stroke: #64748b; stroke-width: 2.5; stroke-dasharray: 8 8; marker-end: url(#arrow); }
+      .chip { fill: #e0f2fe; stroke: #0284c7; stroke-width: 1.5; rx: 12; }
+      .badge-good { fill: #dcfce7; stroke: #16a34a; stroke-width: 1.5; rx: 12; }
+      .badge-bad { fill: #fee2e2; stroke: #dc2626; stroke-width: 1.5; rx: 12; }
+      .badge-warn { fill: #fef3c7; stroke: #d97706; stroke-width: 1.5; rx: 12; }
+    </style>
+
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155" />
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a" />
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#dc2626" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1600" height="1050" />
+
+  <text class="title" x="64" y="70">MacBlock GPU Authorization Watchdog</text>
+  <text class="small" x="66" y="103">Bestia v2 / Ubuntu k3s: authorize local GPU identifiers, protect Nuvolaris by scale-to-zero, restore after valid signed lease.</text>
+
+  <rect class="panel" x="52" y="132" width="1040" height="820" rx="22" />
+  <text class="section" x="82" y="176">Bestia node: Ubuntu k3s</text>
+  <text class="tiny" x="82" y="202">No Docker dependency. Watchdog stays outside namespace nuvolaris.</text>
+
+  <rect class="panel-soft" x="92" y="238" width="315" height="190" rx="16" />
+  <text class="label" x="118" y="274">GPU discovery</text>
+  <text class="mono" x="118" y="306">nvidia-smi --query-gpu</text>
+  <text class="small" x="118" y="338">serial, UUID, PCI bus id</text>
+  <text class="small" x="118" y="366">fallback: physical NIC MAC</text>
+  <text class="tiny" x="118" y="394">Only development may simulate devices.</text>
+
+  <rect class="kube panel-soft" x="468" y="238" width="565" height="355" rx="18" />
+  <text class="section" x="496" y="278">Namespace kube-system</text>
+
+  <rect class="panel" x="502" y="315" width="245" height="178" rx="16" />
+  <text class="label" x="528" y="354">Deployment</text>
+  <text class="text" x="528" y="384">bestia-macblock</text>
+  <text class="small" x="528" y="416">replicas: 1</text>
+  <text class="small" x="528" y="444">system-cluster-critical</text>
+  <text class="tiny" x="528" y="470">Pulls public GHCR image</text>
+
+  <rect class="state panel-soft" x="784" y="315" width="216" height="112" rx="14" />
+  <text class="label" x="810" y="350">State ConfigMap</text>
+  <text class="small" x="810" y="380">failures, lease</text>
+  <text class="small" x="810" y="408">snapshots</text>
+
+  <rect class="secret panel-soft" x="784" y="455" width="216" height="92" rx="14" />
+  <text class="label" x="810" y="490">Secret auth</text>
+  <text class="small" x="810" y="520">API key only</text>
+
+  <rect class="panel-soft" x="92" y="486" width="315" height="150" rx="16" />
+  <text class="label" x="118" y="522">k3s AddOn source</text>
+  <text class="mono" x="118" y="554">/var/lib/rancher/k3s/</text>
+  <text class="mono" x="118" y="580">server/manifests/</text>
+  <text class="mono" x="118" y="606">bestia-macblock.yaml</text>
+  <text class="tiny" x="118" y="630">Recreates workload after accidental delete.</text>
+
+  <rect class="panel-soft" x="92" y="704" width="315" height="166" rx="16" />
+  <text class="label" x="118" y="740">ops surface</text>
+  <text class="mono" x="118" y="772">ops bestia macblock install</text>
+  <text class="mono" x="118" y="800">status / doctor / verify</text>
+  <text class="mono" x="118" y="828">enforce / restore / logs</text>
+  <text class="tiny" x="118" y="856">uninstall requires protected private key.</text>
+
+  <rect class="nuvolaris panel-soft" x="468" y="650" width="565" height="245" rx="18" />
+  <text class="section" x="496" y="690">Namespace nuvolaris</text>
+  <text class="tiny" x="496" y="716">No workload exclusions in blocked state.</text>
+
+  <rect class="panel" x="504" y="748" width="230" height="94" rx="14" />
+  <text class="label" x="530" y="784">Workloads</text>
+  <text class="small" x="530" y="816">Deployment, StatefulSet</text>
+
+  <rect class="panel" x="768" y="748" width="230" height="94" rx="14" />
+  <text class="label" x="794" y="784">Schedulers</text>
+  <text class="small" x="794" y="816">CronJob, HPA, orphans</text>
+
+  <rect class="external panel" x="1160" y="170" width="360" height="220" rx="20" />
+  <text class="section" x="1192" y="214">External Nuvolaris API</text>
+  <text class="mono" x="1192" y="252">POST https://api.nuvolaris.io</text>
+  <text class="mono" x="1192" y="280">/v1/serials_check</text>
+  <text class="small" x="1192" y="322">auth: API key</text>
+  <text class="small" x="1192" y="350">response: authorized + signed lease</text>
+
+  <rect class="image panel-soft" x="1160" y="92" width="360" height="62" rx="14" />
+  <text class="label" x="1192" y="120">Runtime image repo</text>
+  <text class="mono" x="1192" y="144">ghcr.io/nuvolaris/macblock:0.1.0</text>
+
+  <rect class="panel-soft" x="1160" y="406" width="360" height="52" rx="14" />
+  <text class="small" x="1192" y="438">E2E mock: kube-system Service, dev overrides only</text>
+
+  <rect class="danger panel" x="1160" y="474" width="360" height="196" rx="20" />
+  <text class="section" x="1192" y="518">Blocked state</text>
+  <text class="small" x="1192" y="556">Trigger: 5 consecutive failures</text>
+  <text class="small" x="1192" y="586">without a still-valid lease</text>
+  <text class="small" x="1192" y="624">Reconcile namespace nuvolaris to zero</text>
+
+  <rect class="external panel" x="1160" y="736" width="360" height="170" rx="20" />
+  <text class="section" x="1192" y="780">Restore path</text>
+  <text class="small" x="1192" y="818">authorized=true</text>
+  <text class="small" x="1192" y="848">valid signed lease</text>
+  <text class="small" x="1192" y="878">auto-restore replicas, CronJobs, HPA</text>
+
+  <path class="arrow" d="M 407 333 C 440 333 454 380 502 380" />
+  <text class="tiny" x="420" y="316">device facts</text>
+
+  <path class="arrow-soft" d="M 407 558 C 450 542 455 464 502 438" />
+  <text class="tiny" x="414" y="540">AddOn reconciles</text>
+
+  <path class="arrow-soft" d="M 747 374 L 784 374" />
+  <text class="tiny" x="750" y="356">read/write state</text>
+
+  <path class="arrow-dashed" d="M 1160 126 C 990 132 874 270 747 342" />
+  <text class="tiny" x="896" y="166">image pull</text>
+
+  <path class="arrow" d="M 747 360 C 900 225 1000 240 1160 270" />
+  <text class="tiny" x="898" y="238">GPU IDs + installation data</text>
+
+  <path class="arrow-good" d="M 1160 332 C 1022 408 890 440 747 418" />
+  <text class="tiny" x="966" y="436">authorized=true, lease_signature</text>
+
+  <path class="arrow-dashed" d="M 748 390 C 920 390 1014 414 1160 430" />
+  <text class="tiny" x="868" y="384">dev e2e mock URL</text>
+
+  <path class="arrow-bad" d="M 1160 540 C 1010 548 902 511 747 446" />
+  <text class="tiny" x="938" y="536">denied, 401/403, no lease</text>
+
+  <path class="arrow-bad" d="M 748 463 C 906 502 1015 546 1160 574" />
+  <text class="tiny" x="850" y="494">consecutive_failures &gt;= 5</text>
+
+  <path class="arrow-bad" d="M 1160 625 C 1022 658 963 732 998 748" />
+  <text class="tiny" x="1018" y="704">scale to zero / suspend</text>
+
+  <path class="arrow-bad" d="M 1000 804 C 1064 812 1110 766 1160 622" />
+  <text class="tiny" x="1038" y="830">keep reconciled</text>
+
+  <path class="arrow-good" d="M 1160 820 C 1046 845 1010 860 998 820" />
+  <text class="tiny" x="1016" y="882">auto-restore from snapshot</text>
+
+  <path class="arrow-dashed" d="M 407 792 C 466 792 484 792 504 792" />
+  <text class="tiny" x="414" y="774">manual enforce / restore</text>
+
+  <rect class="badge-good" x="78" y="926" width="300" height="54" rx="14" />
+  <text class="small" x="102" y="960">Authorized: keep nuvolaris active</text>
+
+  <rect class="badge-warn" x="410" y="926" width="370" height="54" rx="14" />
+  <text class="small" x="434" y="960">Transient error: lease grace if still valid</text>
+
+  <rect class="badge-bad" x="812" y="926" width="360" height="54" rx="14" />
+  <text class="small" x="836" y="960">Denied or expired: block after 5 failures</text>
+
+  <rect class="chip" x="1204" y="926" width="280" height="54" rx="14" />
+  <text class="small" x="1228" y="960">No cluster-admin RBAC</text>
+</svg>

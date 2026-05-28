@@ -5,6 +5,13 @@ Installer commands live in `nuvolaris/olaris-bestia` under
 `ops bestia macblock`; this repository owns only the runtime code and container
 builder for the in-cluster watchdog pod.
 
+## Specification
+
+- `spec.md`: product, runtime, installer integration, API contract, and
+  acceptance criteria.
+- `spec.svg`: architecture and flow diagram. Keep it aligned with `spec.md`
+  whenever MacBlock behavior or deployment shape changes.
+
 ## Image
 
 Primary image:
