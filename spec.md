@@ -23,8 +23,9 @@ installato nel cluster k3s locale. Il watchdog:
 L'implementazione server-side di
 `https://api.nuvolaris.io/v1/serials_check` non e' in scope per questo
 repository.
-Questa specifica definisce pero' il contratto minimo atteso dal client, in modo
-che il futuro endpoint possa essere implementato senza ambiguita'.
+Questa specifica definisce il contratto minimo atteso dal client; la specifica
+di produzione server-side vive in `nuvolaris/ai-proxy` come
+`spec/serial-check.md`.
 
 ## Ambito
 
@@ -32,8 +33,6 @@ In scope:
 
 - manifest Kubernetes e/o task installer per installare il watchdog;
 - immagine runtime pullabile del watchdog tramite subrepo root `macblock`;
-- mock API di sviluppo per prove end-to-end del contratto
-  `api.nuvolaris.io`;
 - discovery GPU sul nodo Bestia;
 - chiamata HTTPS al servizio Nuvolaris di verifica seriali;
 - gestione del contatore dei fallimenti;
@@ -87,8 +86,7 @@ contiene invece solo installazione e configurazione operativa:
 
 - comandi `ops bestia macblock ...`;
 - render del manifest k3s AddOn;
-- Secret, RBAC, ConfigMap di stato e opzioni di installazione;
-- mock API di sviluppo.
+- Secret, RBAC, ConfigMap di stato e opzioni di installazione.
 
 Il manifest di produzione deve quindi usare un'immagine GHCR pullabile e non
 deve dipendere da codice runtime montato tramite ConfigMap generata localmente.
@@ -580,8 +578,6 @@ olaris-bestia/macblock/README.md
 olaris-bestia/macblock/docopts.md
 olaris-bestia/macblock/opsfile.yml
 olaris-bestia/macblock/bestia-macblock.ts
-olaris-bestia/macblock/mock-api.ts
-olaris-bestia/macblock/mock-api/spec.md
 olaris-bestia/macblock/manifests/bestia-macblock.yaml
 ```
 
@@ -610,13 +606,11 @@ L'immagine runtime del pod deve seguire `macblock/Containerfile`, essere
 pubblicata su GHCR e includere almeno `bun`, `kubectl`, CA certificates/curl
 support e `nvidia-smi`.
 
-Il mock API di sviluppo deve essere documentato in
-`olaris-bestia/macblock/mock-api/spec.md`. Deve esporre lo stesso endpoint
-MacBlock-facing `POST /v1/serials_check`, supportare modalita' `allow`, `deny`,
-`error`, `timeout` e `invalid-json`, ed essere eseguibile sia come server locale
-sia come `Deployment/Service` Kubernetes in `kube-system` per prove end-to-end.
-Il mock puo' usare HTTP e override di sviluppo espliciti; la produzione resta
-vincolata a `https://api.nuvolaris.io/v1/serials_check`.
+Il contratto server-side di produzione per `POST /v1/serials_check` deve essere
+documentato e implementato in `nuvolaris/ai-proxy`; la specifica corrente e'
+`ai-proxy/spec/serial-check.md` nel workspace parent. MacBlock mantiene solo il
+contratto client e i controlli watchdog necessari per classificare successi,
+denial, errori hard e fallimenti transitori.
 
 ## Configurazione
 

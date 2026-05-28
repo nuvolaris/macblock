@@ -7,12 +7,18 @@
 - Kept `bestia-installer` as the parent repository and left install/config
   integration under `olaris-bestia/macblock`.
 
-## Session Recap (2026-05-28, mock e2e validation)
-- Ran an end-to-end mock authorization test against the real `nuvolaris`
-  namespace using `Service/bestia-macblock-api-mock` in `kube-system` and
-  watchdog image `ghcr.io/nuvolaris/macblock:0.1.0`.
+## Session Recap (2026-05-28, development e2e validation)
+- Ran an end-to-end development authorization test against the real `nuvolaris`
+  namespace using watchdog image `ghcr.io/nuvolaris/macblock:0.1.0`.
 - Fixed manifest rendering so development override env is propagated into the
   watchdog pod and the rendered RBAC Role uses
   `rbac.authorization.k8s.io/v1`.
 - Verified allow, deny enforcement, snapshot, auto-restore, and cleanup; the
   `nuvolaris` workloads returned to their baseline replicas and Ready state.
+
+## Session Recap (2026-05-28, production serial-check spec split)
+- Removed server-side API ownership from the MacBlock runtime-image project spec
+  and diagram.
+- Pointed the server-side `POST /v1/serials_check` contract at
+  `nuvolaris/ai-proxy/spec/serial-check.md`; MacBlock keeps only watchdog,
+  runtime image, client contract and enforcement behavior.
