@@ -820,6 +820,9 @@ function renderManifest(apiKey: string): string {
     : runtimeClassRaw;
   const runtimeClassLine = runtimeClass ? `      runtimeClassName: ${runtimeClass}\n` : "";
   const simulatedGpuJson = devOverridesEnabled() ? env("BESTIA_MACBLOCK_SIMULATED_GPU_JSON", "") : "";
+  const devOverridesEnv = devOverridesEnabled()
+    ? `            - name: BESTIA_MACBLOCK_DEV_OVERRIDES\n              value: "true"\n`
+    : "";
   const simulatedGpuEnv = simulatedGpuJson
     ? `            - name: BESTIA_MACBLOCK_SIMULATED_GPU_JSON\n              value: ${JSON.stringify(simulatedGpuJson)}\n`
     : "";
@@ -843,7 +846,7 @@ type: Opaque
 data:
   ${API_KEY_SECRET_KEY}: ${base64(apiKey)}
 ---
-apiVersion: v1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: ${APP}
@@ -972,7 +975,7 @@ ${runtimeClassLine}      tolerations:
           imagePullPolicy: IfNotPresent
           command: ["bun", "/opt/bestia/macblock/bestia-macblock.ts", "watchdog-loop"]
           env:
-            - name: BESTIA_MACBLOCK_API_URL
+${devOverridesEnv}            - name: BESTIA_MACBLOCK_API_URL
               value: "${API_URL}"
             - name: BESTIA_MACBLOCK_API_KEY
               valueFrom:
