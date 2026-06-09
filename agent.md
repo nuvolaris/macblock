@@ -1,5 +1,16 @@
 # MacBlock Agent Log
 
+## Session Recap (2026-06-09, install registration and explicit policy)
+- Changed MacBlock runtime semantics so install creates AddOn components and
+  attempts proxy registration without mutating local workloads on registration
+  failure.
+- Changed watchdog failures to record state and request an explicit post-expiry
+  policy instead of automatically blocking after the failure threshold.
+- Added explicit policy selection for enforcement: A/remove-components,
+  B/register-out-of-support, and C/block-product, with only C applying the
+  strong scale-to-zero block.
+- Updated the MacBlock spec, README and SVG to match the new policy flow.
+
 ## Session Recap (2026-05-28, project spec migration)
 - Promoted MacBlock to a standalone project shape inside the `nuvolaris/macblock`
   subrepo by moving the canonical product spec to `spec.md` and the architecture

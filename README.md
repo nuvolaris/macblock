@@ -5,6 +5,12 @@ Installer commands live in `nuvolaris/olaris-bestia` under
 `ops bestia macblock`; this repository owns only the runtime code and container
 builder for the in-cluster watchdog pod.
 
+Current behavior: installation creates the Kubernetes components and attempts a
+serial-check registration with the proxy. Repeated failed checks are recorded in
+state, but the watchdog does not choose a post-expiry product policy by itself.
+The operator selects policy A, B, or C through `ops bestia macblock enforce` in
+the installer module.
+
 ## Specification
 
 - `spec.md`: product, runtime, installer integration, API contract, and

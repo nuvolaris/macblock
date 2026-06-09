@@ -3,7 +3,7 @@
   <desc id="desc">
     Architecture and flow diagram for the Bestia MacBlock watchdog: GPU discovery,
     public GHCR runtime image, external serial authorization, persistent state,
-    scale-to-zero enforcement, and restore.
+    explicit policy enforcement, and restore.
   </desc>
 
   <defs>
@@ -50,7 +50,7 @@
   <rect class="bg" x="0" y="0" width="1600" height="1050" />
 
   <text class="title" x="64" y="70">MacBlock GPU Authorization Watchdog</text>
-  <text class="small" x="66" y="103">Bestia v2 / Ubuntu k3s: authorize local GPU identifiers, protect Nuvolaris by scale-to-zero, restore after valid signed lease.</text>
+  <text class="small" x="66" y="103">Bestia v2 / Ubuntu k3s: install components, register local identifiers, then choose post-expiry policy explicitly.</text>
 
   <rect class="panel" x="52" y="132" width="1040" height="820" rx="22" />
   <text class="section" x="82" y="176">Bestia node: Ubuntu k3s</text>
@@ -91,9 +91,9 @@
 
   <rect class="panel-soft" x="92" y="704" width="315" height="166" rx="16" />
   <text class="label" x="118" y="740">ops surface</text>
-  <text class="mono" x="118" y="772">ops bestia macblock install</text>
+  <text class="mono" x="118" y="772">install: AddOn + registration</text>
   <text class="mono" x="118" y="800">status / doctor / verify</text>
-  <text class="mono" x="118" y="828">enforce / restore / logs</text>
+  <text class="mono" x="118" y="828">enforce policy A/B/C</text>
   <text class="tiny" x="118" y="856">uninstall requires protected private key.</text>
 
   <rect class="nuvolaris panel-soft" x="468" y="650" width="565" height="245" rx="18" />
@@ -123,9 +123,9 @@
   <text class="small" x="1192" y="438">Server spec: ai-proxy/spec/serial-check.md</text>
 
   <rect class="danger panel" x="1160" y="474" width="360" height="196" rx="20" />
-  <text class="section" x="1192" y="518">Blocked state</text>
-  <text class="small" x="1192" y="556">Trigger: 5 consecutive failures</text>
-  <text class="small" x="1192" y="586">without a still-valid lease</text>
+  <text class="section" x="1192" y="518">Policy C blocked state</text>
+  <text class="small" x="1192" y="556">Trigger: enforce block-product</text>
+  <text class="small" x="1192" y="586">after operator policy choice</text>
   <text class="small" x="1192" y="624">Reconcile namespace nuvolaris to zero</text>
 
   <rect class="external panel" x="1160" y="736" width="360" height="170" rx="20" />
@@ -156,10 +156,10 @@
   <text class="tiny" x="868" y="384">production API contract</text>
 
   <path class="arrow-bad" d="M 1160 540 C 1010 548 902 511 747 446" />
-  <text class="tiny" x="938" y="536">denied, 401/403, no lease</text>
+  <text class="tiny" x="938" y="536">denied, 401/403, no lease recorded</text>
 
   <path class="arrow-bad" d="M 748 463 C 906 502 1015 546 1160 574" />
-  <text class="tiny" x="850" y="494">consecutive_failures &gt;= 5</text>
+  <text class="tiny" x="850" y="494">policy required after repeated failures</text>
 
   <path class="arrow-bad" d="M 1160 625 C 1022 658 963 732 998 748" />
   <text class="tiny" x="1018" y="704">scale to zero / suspend</text>
@@ -171,7 +171,7 @@
   <text class="tiny" x="1016" y="882">auto-restore from snapshot</text>
 
   <path class="arrow-dashed" d="M 407 792 C 466 792 484 792 504 792" />
-  <text class="tiny" x="414" y="774">manual enforce / restore</text>
+  <text class="tiny" x="414" y="774">manual enforce policy / restore</text>
 
   <rect class="badge-good" x="78" y="926" width="300" height="54" rx="14" />
   <text class="small" x="102" y="960">Authorized: keep nuvolaris active</text>
@@ -180,7 +180,7 @@
   <text class="small" x="434" y="960">Transient error: lease grace if still valid</text>
 
   <rect class="badge-bad" x="812" y="926" width="360" height="54" rx="14" />
-  <text class="small" x="836" y="960">Denied or expired: block after 5 failures</text>
+  <text class="small" x="836" y="960">Denied or expired: choose policy A/B/C</text>
 
   <rect class="chip" x="1204" y="926" width="280" height="54" rx="14" />
   <text class="small" x="1228" y="960">No cluster-admin RBAC</text>

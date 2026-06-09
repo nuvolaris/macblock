@@ -12,11 +12,13 @@ installato nel cluster k3s locale. Il watchdog:
 - invia periodicamente gli identificativi al servizio esterno:
   `https://api.nuvolaris.io/v1/serials_check`;
 - considera l'endpoint di verifica una dipendenza di licenza/sicurezza esterna;
-- dopo 5 tentativi consecutivi falliti senza una autorizzazione ancora valida,
-  scala a zero le risorse applicative del namespace `nuvolaris`;
-- continua a riconciliare lo stato bloccato, cosi' le risorse non tornano
-  disponibili finche' la verifica non viene ripristinata o non viene eseguita
-  una procedura esplicita di recovery;
+- registra i fallimenti e lo stato della lease senza scegliere automaticamente
+  una policy commerciale post-scadenza;
+- quando una policy di blocco forte viene selezionata esplicitamente, scala a
+  zero le risorse applicative del namespace `nuvolaris`;
+- continua a riconciliare uno stato bloccato gia' selezionato, cosi' le risorse
+  non tornano disponibili finche' la verifica non viene ripristinata o non viene
+  eseguita una procedura esplicita di recovery;
 - viene installato come componente critico di k3s e non vive nel namespace
   `nuvolaris`, altrimenti verrebbe spento dalla sua stessa azione di blocco.
 
@@ -35,8 +37,9 @@ In scope:
 - immagine runtime pullabile del watchdog tramite subrepo root `macblock`;
 - discovery GPU sul nodo Bestia;
 - chiamata HTTPS al servizio Nuvolaris di verifica seriali;
-- gestione del contatore dei fallimenti;
-- enforcement sul namespace `nuvolaris`;
+- gestione del contatore dei fallimenti e registrazione installazione/proxy;
+- selezione manuale della policy post-scadenza e, quando scelta, enforcement
+  sul namespace `nuvolaris`;
 - protezione operativa contro cancellazione accidentale del watchdog;
 - comandi `ops bestia macblock ...` di installazione, stato, test e recovery;
 - documentazione operativa e criteri di validazione.
@@ -313,6 +316,9 @@ Regole:
 - ogni fallimento hard incrementa `consecutive_failures`;
 - ogni fallimento transitorio incrementa `consecutive_failures` solo se non
   esiste una lease valida;
+- raggiungere la soglia di fallimenti non applica da solo una policy
+  post-scadenza; il watchdog registra l'evento e richiede una scelta esplicita
+  tramite `ops bestia macblock enforce`;
 - se `blocked=true`, il watchdog continua a riconciliare il namespace
   `nuvolaris` a zero;
 - un nuovo successo dopo blocco deve attivare l'auto-restore se la lease
@@ -322,8 +328,10 @@ Regole:
 
 ## Enforcement sul namespace nuvolaris
 
-Quando `consecutive_failures >= 5` e non esiste una lease valida, il watchdog
-entra in stato bloccato.
+Quando un operatore seleziona la policy C / `block-product`, il watchdog entra
+in stato bloccato e applica l'enforcement forte. La soglia
+`consecutive_failures >= 5` senza lease valida e' un segnale operativo per
+scegliere una policy, non un trigger automatico di blocco.
 
 Azione primaria:
 
@@ -529,14 +537,18 @@ ops bestia macblock uninstall --confirm UNINSTALL
 ops bestia macblock status
 ops bestia macblock doctor
 ops bestia macblock verify
-ops bestia macblock enforce --confirm BLOCK
+ops bestia macblock enforce --policy=remove-components --confirm=REMOVE
+ops bestia macblock enforce --policy=register-out-of-support --confirm=REGISTER
+ops bestia macblock enforce --policy=block-product --confirm=BLOCK
 ops bestia macblock restore --confirm RESTORE
 ops bestia macblock logs
 ```
 
 Semantica:
 
-- `install`: crea/aggiorna manifest AddOn k3s, Secret/ConfigMap e RBAC;
+- `install`: crea/aggiorna manifest AddOn k3s, Secret/ConfigMap e RBAC, poi
+  tenta una registrazione immediata sul proxy serial-check senza modificare i
+  workload locali se la registrazione fallisce;
 - `uninstall`: rimuove il watchdog solo con conferma esplicita e senza
   ripristinare automaticamente `nuvolaris` se e' bloccato; funziona solo se
   viene inserita una chiave privata specifica conosciuta dal team Nuvolaris,
@@ -548,7 +560,12 @@ Semantica:
   capacita' di enforcement dry-run;
 - `verify`: esegue una verifica immediata senza cambiare stato, salvo
   aggiornare timestamp diagnostici;
-- `enforce`: forza il blocco per test controllati;
+- `enforce`: seleziona una delle tre policy post-scadenza documentate nel
+  diagramma di manutenzione:
+  - A / `remove-components`: rimuove componenti System, Console e Trustable;
+  - B / `register-out-of-support`: registra lo stato fuori supporto senza
+    modificare il server locale;
+  - C / `block-product`: applica enforcement forte scale-to-zero;
 - `restore`: ripristina risorse dal snapshot dopo autorizzazione valida;
 - `logs`: mostra log watchdog e ultimi eventi Kubernetes correlati.
 
@@ -684,6 +701,10 @@ e' intenzionale per licenza/sicurezza, non un guasto generico del cluster.
 Installazione:
 
 - `ops bestia macblock install` crea il manifest AddOn k3s;
+- `install` tenta una registrazione serial-check verso il proxy e salva
+  risultato diagnostico nello stato;
+- una registrazione fallita durante `install` non scala, sospende o rimuove
+  workload locali;
 - il pod parte in `kube-system`;
 - il pod usa `system-cluster-critical`;
 - RBAC non usa `cluster-admin`;
@@ -698,7 +719,17 @@ Verifica autorizzata:
 Verifica negata:
 
 - con endpoint che risponde `authorized=false`, il contatore incrementa;
-- al quinto fallimento consecutivo viene impostato `blocked=true`;
+- al quinto fallimento consecutivo viene registrato che serve una scelta policy;
+- non viene impostato `blocked=true` finche' un operatore non seleziona la
+  policy C / `block-product`;
+
+Policy enforcement:
+
+- policy A / `remove-components` rimuove System, Console e Trustable secondo le
+  superfici disponibili;
+- policy B / `register-out-of-support` registra sul proxy e non modifica
+  workload locali;
+- policy C / `block-product` imposta `blocked=true`;
 - Deployment/StatefulSet/ReplicaSet target in `nuvolaris` vengono scalati a
   zero;
 - CronJob target vengono sospesi;
@@ -708,8 +739,9 @@ Verifica negata:
 Errore transitorio:
 
 - timeout/DNS/TLS/5xx vengono registrati;
-- se esiste una lease valida non scaduta, il blocco non parte immediatamente;
-- se non esiste lease valida, dopo 5 fallimenti consecutivi parte il blocco.
+- se esiste una lease valida non scaduta, non viene richiesta policy immediata;
+- se non esiste lease valida, dopo 5 fallimenti consecutivi viene richiesta una
+  scelta policy esplicita.
 
 Persistenza:
 

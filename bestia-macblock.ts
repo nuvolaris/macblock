@@ -20,7 +20,7 @@ const STATE_CONFIGMAP = "bestia-macblock-state";
 const SECRET_NAME = "bestia-macblock-auth";
 const STATE_KEY = "state.json";
 const API_KEY_SECRET_KEY = "api-key";
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 type RunOptions = {
   allowFail?: boolean;
@@ -65,6 +65,9 @@ type MacBlockState = {
   last_success_at: string;
   last_failure_at: string;
   last_failure_reason: string;
+  last_registration_at: string;
+  last_registration_result: string;
+  last_enforcement_policy: string;
   blocked: boolean;
   blocked_at: string;
   last_authorized_lease_until: string;
@@ -88,6 +91,8 @@ type VerifyResult = {
   leaseSignature?: string;
   validUntil?: string;
 };
+
+type EnforcementPolicy = "remove-components" | "register-out-of-support" | "block-product";
 
 function env(name: string, fallback = ""): string {
   const value = process.env[name];
@@ -232,6 +237,9 @@ function initialState(): MacBlockState {
     last_success_at: "",
     last_failure_at: "",
     last_failure_reason: "",
+    last_registration_at: "",
+    last_registration_result: "",
+    last_enforcement_policy: "",
     blocked: false,
     blocked_at: "",
     last_authorized_lease_until: "",
@@ -559,6 +567,102 @@ function hasValidLease(state: MacBlockState): boolean {
     && Date.parse(state.last_authorized_lease_until) > Date.now();
 }
 
+function normalizePolicy(policy: string): EnforcementPolicy {
+  const value = policy.trim().toLowerCase();
+  if (["a", "remove", "remove-components", "remove_components"].includes(value)) {
+    return "remove-components";
+  }
+  if (["b", "register", "register-only", "register_out_of_support", "register-out-of-support"].includes(value)) {
+    return "register-out-of-support";
+  }
+  if (["c", "block", "block-product", "block_product"].includes(value)) {
+    return "block-product";
+  }
+  die("Use --policy=remove-components, --policy=register-out-of-support, or --policy=block-product.");
+}
+
+function policyConfirmWord(policy: EnforcementPolicy): string {
+  switch (policy) {
+    case "remove-components":
+      return "REMOVE";
+    case "register-out-of-support":
+      return "REGISTER";
+    case "block-product":
+      return "BLOCK";
+  }
+}
+
+function recordNoIdentifiers(state: MacBlockState, context: string, countFailure: boolean): MacBlockState {
+  const next = { ...state };
+  const reason = "no_gpu_or_physical_mac_identifier";
+  next.last_registration_at = nowIso();
+  next.last_registration_result = `${context}:${reason}`;
+  next.last_failure_at = next.last_registration_at;
+  next.last_failure_reason = reason;
+  if (countFailure && !hasValidLease(next)) {
+    next.consecutive_failures += 1;
+  }
+  return next;
+}
+
+function recordVerificationResult(
+  state: MacBlockState,
+  result: VerifyResult,
+  context: string,
+  countFailure: boolean,
+): MacBlockState {
+  const next = { ...state };
+  next.last_registration_at = nowIso();
+  next.last_registration_result = result.authorized ? `${context}:authorized` : `${context}:${result.reason}`;
+  if (result.authorized) {
+    next.consecutive_failures = 0;
+    next.last_success_at = next.last_registration_at;
+    next.last_failure_reason = "";
+    next.last_authorized_lease_until = result.validUntil || "";
+    return next;
+  }
+
+  const leaseStillValid = hasValidLease(next);
+  next.last_failure_at = next.last_registration_at;
+  next.last_failure_reason = result.reason;
+  if (countFailure && (result.hardFailure || !leaseStillValid)) {
+    next.consecutive_failures += 1;
+  }
+  return next;
+}
+
+async function registerWithProxy(context: string, countFailure: boolean): Promise<{
+  state: MacBlockState;
+  result?: VerifyResult;
+  identifiers: number;
+}> {
+  const apiKey = configuredApiKey(true);
+  let state = loadState();
+  const gpus = discoverGpus();
+  if (gpus.length === 0) {
+    state = recordNoIdentifiers(state, context, countFailure);
+    saveState(state);
+    return { state, identifiers: 0 };
+  }
+
+  const result = await verifyAuthorization(apiKey, buildPayload(gpus));
+  state = recordVerificationResult(state, result, context, countFailure);
+  saveState(state);
+  return { state, result, identifiers: gpus.length };
+}
+
+function maybeWarnManualEnforceRequired(state: MacBlockState, maxFailures: number): void {
+  if (state.blocked || state.consecutive_failures < maxFailures || hasValidLease(state)) {
+    return;
+  }
+  createEvent(
+    "Warning",
+    "MacBlockEnforceRequired",
+    `MacBlock recorded ${state.consecutive_failures} failures; choose a policy with ops bestia macblock enforce.`,
+  );
+  console.log(`MacBlock policy required after ${state.consecutive_failures} failures; run ops bestia macblock enforce --policy=<A|B|C>.`);
+}
+
 function itemName(item: K8sObject): string {
   return item.metadata?.name || "";
 }
@@ -753,50 +857,31 @@ function createEvent(type: "Normal" | "Warning", reason: string, message: string
 }
 
 async function watchdogOnce(): Promise<void> {
-  const apiKey = env("BESTIA_MACBLOCK_API_KEY", "");
-  let state = loadState();
-  const gpus = discoverGpus();
-  const payload = buildPayload(gpus);
   const maxFailures = numberValue("BESTIA_MACBLOCK_MAX_FAILURES", 5);
   const autoRestore = boolValue(releaseOrDevConfig("BESTIA_MACBLOCK_AUTO_RESTORE", "true"), true);
+  const registration = await registerWithProxy("watchdog", true);
+  let state = registration.state;
+  const result = registration.result;
 
-  if (gpus.length === 0) {
-    state.last_failure_at = nowIso();
-    state.last_failure_reason = "no_gpu_or_physical_mac_identifier";
-    state.consecutive_failures += hasValidLease(state) ? 0 : 1;
-    if (state.consecutive_failures >= maxFailures && !hasValidLease(state)) {
-      state = enforceBlock(state, state.last_failure_reason);
-    }
-    saveState(state);
-    return;
-  }
-
-  const result = await verifyAuthorization(apiKey, payload);
-  if (result.authorized) {
-    state.consecutive_failures = 0;
-    state.last_success_at = nowIso();
-    state.last_failure_reason = "";
-    state.last_authorized_lease_until = result.validUntil || "";
+  if (result?.authorized) {
     if (state.blocked && autoRestore) {
       state = restoreFromSnapshot(state);
+      saveState(state);
     }
-    saveState(state);
     createEvent("Normal", "MacBlockAuthorized", "MacBlock authorization succeeded.");
-    console.log(`MacBlock authorized ${gpus.length} identifier(s), lease valid until ${result.validUntil}`);
+    console.log(`MacBlock authorized ${registration.identifiers} identifier(s), lease valid until ${result.validUntil}`);
     return;
   }
 
-  const leaseStillValid = hasValidLease(state);
-  state.last_failure_at = nowIso();
-  state.last_failure_reason = result.reason;
-  if (result.hardFailure || !leaseStillValid) {
-    state.consecutive_failures += 1;
+  if (state.blocked) {
+    state = enforceBlock(state, state.last_failure_reason || "manual_enforce_reconcile");
+    saveState(state);
+    console.log(`MacBlock remains blocked; reconciled ${TARGET_NAMESPACE} to selected enforcement state.`);
+    return;
   }
-  if (state.consecutive_failures >= maxFailures && !hasValidLease(state)) {
-    state = enforceBlock(state, result.reason);
-  }
-  saveState(state);
-  console.log(`MacBlock verification failed: ${result.reason}; consecutive_failures=${state.consecutive_failures}`);
+
+  maybeWarnManualEnforceRequired(state, maxFailures);
+  console.log(`MacBlock registration failed: ${state.last_failure_reason}; consecutive_failures=${state.consecutive_failures}; no automatic enforcement applied.`);
 }
 
 async function watchdogLoop(): Promise<void> {
@@ -1042,7 +1127,7 @@ function writeAddonManifest(manifest: string): string {
   return tmp;
 }
 
-function install(): void {
+async function install(): Promise<void> {
   prereqKubectl();
   if (kubectl(["get", "namespace", TARGET_NAMESPACE], { allowFail: true, quiet: true }).status !== 0) {
     die(`Namespace ${TARGET_NAMESPACE} not found. Install Nuvolaris before MacBlock.`);
@@ -1061,6 +1146,13 @@ function install(): void {
     console.error(rollout.stderr.trim() || rollout.stdout.trim());
   }
   console.log(`MacBlock installed as k3s AddOn: ${envOrConfig("BESTIA_MACBLOCK_ADDON_PATH", DEFAULT_ADDON_PATH)}`);
+
+  const registration = await registerWithProxy("install", false);
+  if (registration.result?.authorized) {
+    console.log(`MacBlock registration authorized; lease valid until ${registration.result.validUntil}`);
+  } else {
+    console.error(`WARN: MacBlock registration attempted but not authorized: ${registration.state.last_failure_reason || "no identifiers"}.`);
+  }
 }
 
 function validateUninstallKey(): void {
@@ -1117,6 +1209,9 @@ function status(): void {
   console.log(`  Last success: ${state.last_success_at || "-"}`);
   console.log(`  Last failure: ${state.last_failure_at || "-"}`);
   console.log(`  Last failure reason: ${state.last_failure_reason || "-"}`);
+  console.log(`  Last registration: ${state.last_registration_at || "-"}`);
+  console.log(`  Last registration result: ${state.last_registration_result || "-"}`);
+  console.log(`  Last enforcement policy: ${state.last_enforcement_policy || "-"}`);
   console.log(`  Lease valid until: ${state.last_authorized_lease_until || "-"}`);
   console.log(`  Snapshot workloads: deployments=${Object.keys(state.snapshots.deployments || {}).length}, statefulsets=${Object.keys(state.snapshots.statefulsets || {}).length}, replicasets=${Object.keys(state.snapshots.replicasets || {}).length}, cronjobs=${Object.keys(state.snapshots.cronjobs || {}).length}, hpas=${Object.keys(state.snapshots.hpas || {}).length}`);
   kubectlNs(SYSTEM_NAMESPACE, ["get", "deploy", APP, "-o", "wide"], { allowFail: true });
@@ -1160,13 +1255,71 @@ async function verifyNow(): Promise<void> {
   console.log(`MacBlock verification authorized; lease valid until ${result.validUntil}`);
 }
 
-function enforceCommand(confirm: string): void {
-  if (confirm !== "BLOCK") {
-    die("Use --confirm=BLOCK to force MacBlock enforcement.");
+function removeProductComponents(): MacBlockState {
+  const state = loadState();
+  if (commandExists("ops")) {
+    run("ops", ["admin", "deleteuser", "system"], { allowFail: true });
+    run("ops", ["admin", "deleteuser", "console"], { allowFail: true });
+  } else {
+    console.error("WARN: ops command not found; cannot remove system/console Nuvolaris users from this environment.");
   }
-  const state = enforceBlock(loadState(), "manual_enforce");
+  kubectlNs(TARGET_NAMESPACE, [
+    "delete",
+    "sts/trustable",
+    "svc/trustable-svc",
+    "cm/nginx-proxy-config",
+    "ing/trustable-ing",
+    "ing/opencode-ing",
+    "ing/vite-ing",
+    "secret/kube-secret",
+    "svc/trustable-ssh",
+    "--ignore-not-found",
+  ], { allowFail: true });
+
+  const next = {
+    ...state,
+    last_enforcement_policy: "remove-components",
+    last_failure_reason: "manual_policy_remove_components",
+  };
+  createEvent("Warning", "MacBlockPolicyRemoveComponents", "MacBlock removed system, console, and Trustable components by policy.");
+  return next;
+}
+
+async function registerOutOfSupportPolicy(): Promise<MacBlockState> {
+  const registration = await registerWithProxy("enforce:register-out-of-support", false);
+  const next = {
+    ...registration.state,
+    last_enforcement_policy: "register-out-of-support",
+    last_failure_reason: registration.result?.authorized ? "" : registration.state.last_failure_reason,
+  };
+  createEvent("Normal", "MacBlockPolicyRegistered", "MacBlock registered out-of-support state without changing local workloads.");
+  return next;
+}
+
+async function enforceCommand(confirm: string, policyArg: string): Promise<void> {
+  prereqKubectl();
+  const policy = policyArg.trim() ? normalizePolicy(policyArg) : "block-product";
+  const expectedConfirm = policyConfirmWord(policy);
+  if (confirm !== expectedConfirm) {
+    die(`Use --confirm=${expectedConfirm} for policy ${policy}.`);
+  }
+
+  let state: MacBlockState;
+  switch (policy) {
+    case "remove-components":
+      state = removeProductComponents();
+      break;
+    case "register-out-of-support":
+      state = await registerOutOfSupportPolicy();
+      break;
+    case "block-product":
+      state = enforceBlock(loadState(), "manual_policy_block_product");
+      state.last_enforcement_policy = "block-product";
+      break;
+  }
+
   saveState(state);
-  console.log(`MacBlock enforcement completed for namespace ${TARGET_NAMESPACE}.`);
+  console.log(`MacBlock enforcement policy applied: ${policy}.`);
 }
 
 async function restoreCommand(confirm: string): Promise<void> {
@@ -1188,24 +1341,24 @@ function logs(): void {
 
 function printHelp(): void {
   console.log(`Usage:
-  bestia-macblock.ts install
-  bestia-macblock.ts uninstall <confirm>
-  bestia-macblock.ts status
-  bestia-macblock.ts doctor
-  bestia-macblock.ts verify
-  bestia-macblock.ts enforce <confirm>
-  bestia-macblock.ts restore <confirm>
-  bestia-macblock.ts logs
-  bestia-macblock.ts render-manifest
-  bestia-macblock.ts watchdog-loop
-`);
+	  bestia-macblock.ts install
+	  bestia-macblock.ts uninstall <confirm>
+	  bestia-macblock.ts status
+	  bestia-macblock.ts doctor
+	  bestia-macblock.ts verify
+	  bestia-macblock.ts enforce <confirm> <policy>
+	  bestia-macblock.ts restore <confirm>
+	  bestia-macblock.ts logs
+	  bestia-macblock.ts render-manifest
+	  bestia-macblock.ts watchdog-loop
+	`);
 }
 
 async function main(): Promise<void> {
-  const [command, arg1] = process.argv.slice(2);
+  const [command, arg1, arg2] = process.argv.slice(2);
   switch (command) {
     case "install":
-      install();
+      await install();
       break;
     case "uninstall":
       uninstall(arg1 || "");
@@ -1220,7 +1373,7 @@ async function main(): Promise<void> {
       await verifyNow();
       break;
     case "enforce":
-      enforceCommand(arg1 || "");
+      await enforceCommand(arg1 || "", arg2 || "");
       break;
     case "restore":
       await restoreCommand(arg1 || "");
